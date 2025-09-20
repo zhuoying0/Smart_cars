@@ -1,3 +1,38 @@
+#include <string.h> // 用于memset
+
+IFX_ALIGN(4) uint8_t mt9v03x_image_copy[MT9V03X_H][MT9V03X_W];
+void copy_image(void)
+{
+    memcpy(mt9v03x_image_copy, mt9v03x_image, sizeof(mt9v03x_image));
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     图像黑边添加函数
+// 参数说明     *image          待处理图像指针
+// 返回参数     void
+// 使用示例     imageAddBlackBorder(processed_image);  // 为处理后的图像添加黑边
+// 备注信息
+//              - 在图像四周添加1像素宽度的黑边（0值）
+//              - 顶部/底部黑边：整行填充
+//              - 左右侧黑边：首尾列填充
+//              - 防止后续处理时边界溢出，增强算法鲁棒性
+//-------------------------------------------------------------------------------------------------------------------
+void image_add_black_border(uint8_t *image,uint16_t width,uint16_t height)
+{
+    const uint32_t bottom_offset = width * (height - 1);
+    
+    // 1. 顶部/底部整行处理 (使用memset优化连续内存操作)
+    memset(image, 0, width);                  // 顶部整行
+    memset(image + bottom_offset, 0, width);  // 底部整行
+
+    // 2. 左右边界处理 (单循环合并操作)
+    for(uint16_t row = 1; row < height - 1; row++) {
+        const uint32_t offset = row * width;
+        image[offset] = 0;              // 左边界
+        image[offset + width - 1] = 0; // 右边界
+    }
+}
+
 typedef struct {
     uint8_t x;  // X坐标
     uint8_t y;  // Y坐标
@@ -80,4 +115,5 @@ uint8_t get_start_point(const uint8_t *image, point *p_left, point *p_right)
 
     // 5. 如果遍历完所有行都没有同时找到左右边界，则返回失败
     return 0; // 失败
+
 }
