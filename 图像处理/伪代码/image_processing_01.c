@@ -1,5 +1,5 @@
 #include <string.h> // 用于memset
-
+#include "stdint.h"
 IFX_ALIGN(4) uint8_t mt9v03x_image_copy[MT9V03X_H][MT9V03X_W];
 void copy_image(void)
 {
@@ -117,3 +117,4 @@ uint8_t get_start_point(const uint8_t *image, point *p_left, point *p_right)
     return 0; // 失败
 
 }
+
