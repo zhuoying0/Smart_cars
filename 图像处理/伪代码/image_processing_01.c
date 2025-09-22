@@ -2,9 +2,9 @@
 #include <stdbool.h>
 #define IMAGE_W 188         // 图像处理宽度（像素）
 #define IMAGE_H 120         // 图像处理高度（像素）
-#define IMAGE_WHITE    255
-#define IMAGE_BLACK    0
-#define MAX_EDGE_POINTS 240
+#define IMAGE_WHITE    255  //白色
+#define IMAGE_BLACK    0    //黑色
+#define MAX_EDGE_POINTS 240 //最大边缘点数
 typedef struct {
     uint8_t x;  // X坐标
     uint8_t y;  // Y坐标
@@ -38,17 +38,12 @@ static grow grow_r[8] = {
     {1,0},   // 6: 右移 →
     {1,-1}   // 7: 右上 ↗
 };
-//-------------------------------------------------------------------------------------------------------------------
-// 函数简介      边缘跟踪器结构体
-// 备注信息      封装了单条边缘跟踪所需的所有配置、状态和结果指针。
-// 备注信息      使得代码更加模块化，避免了函数参数过多和全局变量依赖。
-//-------------------------------------------------------------------------------------------------------------------
-// 用于封装单条边缘所有相关数据的结构体
 typedef struct {
     // 原始循迹数据 (来自 search_lr_line)
     // --- 配置参数 ---
     point       start_point;
     const grow* grow_table;
+    uint8_t     threshold;
     // --- 结果存储 (数组内嵌) ---
     point    raw_edge_points[MAX_EDGE_POINTS];
     uint8_t  raw_direction[MAX_EDGE_POINTS];
@@ -93,23 +88,28 @@ typedef struct {
 bool get_start_point(const uint8_t *image, point *p_left, point *p_right)
 {
     int y, x;
-    // 1. 从图像底部向上逐行扫描 (y > 0 是为了避免访问黑边外的区域)
+    // 1. 从图像底部向上逐行扫描。
+    //    y从IMAGE_H - 2开始，是为了跳过最底部的黑边，同时确保安全。
+    //    y > 0 是为了避免扫描到最顶部的黑边。
     for (y = IMAGE_H - 2; y > 0; y--)
     {
-        // 获取当前扫描行的起始内存地址，为指针优化做准备
+        // 性能优化：计算当前行的起始地址，避免在内层循环中重复进行 y * IMAGE_W 的乘法运算。
         const uint8_t *row_ptr = image + y * IMAGE_W;
         
-        // 重置当前行的查找标志
+        // 重置标志位，确保每一行的搜索都是独立的。
         bool l_found = false;
         bool r_found = false;
 
-        // 2. 处理赛道线紧贴图像边缘的特殊情况
+        // 2. 特殊情况处理：检查赛道线是否紧贴左右图像边缘。
+        //    这通常发生在摄像头视野不足，赛道部分移出画面时。
+        //    检查 [1] 和 [2] 是因为 [0] 通常是预留的黑边。
         if (row_ptr[1] == IMAGE_WHITE && row_ptr[2] == IMAGE_WHITE)
         {
             l_found = true;
             p_left->x = 1;
             p_left->y = y;
         }
+        // 同理，检查最右侧的边缘情况。
         if (row_ptr[IMAGE_W - 2] == IMAGE_WHITE && row_ptr[IMAGE_W - 3] == IMAGE_WHITE)
         {
             r_found = true;
@@ -117,44 +117,49 @@ bool get_start_point(const uint8_t *image, point *p_left, point *p_right)
             p_right->y = y;
         }
 
-        // 3. 在行内从左到右进行常规搜索
-        // 使用 row_ptr[x] 代替 image[y * IMAGE_W + x]，避免了重复的乘法运算
-        for (x = 1; x < (IMAGE_W - 2); x++)
+        // 3. 在单行内进行常规扫描搜索。
+        //    循环边界 x < (IMAGE_W - 3) 是为了防止在访问 row_ptr[x + 3] 时发生数组越界。
+        //    例如，当 x = IMAGE_W - 4 时，x+3 = IMAGE_W - 1，这是合法的最大索引。
+        for (x = 1; x < (IMAGE_W - 3); x++)
         {
-            // 如果左边界还没找到，则寻找 黑黑->白白 跳变
+            // 寻找左边界：寻找一个“黑,黑,白,白”的4像素模式。
+            // 相比简单的“黑->白”跳变，这种模式对椒盐噪声等干扰有更强的抵抗力，更稳定。
             if (!l_found && row_ptr[x] == IMAGE_BLACK && row_ptr[x + 1] == IMAGE_BLACK
                              && row_ptr[x + 2] == IMAGE_WHITE && row_ptr[x + 3] == IMAGE_WHITE)
             {
                 l_found = true;
-                p_left->x = x;
+                p_left->x = x; // 记录跳变前的位置
                 p_left->y = y;
             }
             
-            // 如果右边界还没找到，则寻找 白白->黑黑 跳变
+            // 寻找右边界：寻找一个“白,白,黑,黑”的4像素模式。
+            // 同样是为了增强抗干扰能力。
             if (!r_found && row_ptr[x] == IMAGE_WHITE && row_ptr[x + 1] == IMAGE_WHITE
                              && row_ptr[x + 2] == IMAGE_BLACK && row_ptr[x + 3] == IMAGE_BLACK)
             {
                 r_found = true;
-                p_right->x = x;
+                p_right->x = x; // 记录跳变前的位置
                 p_right->y = y;
             }
 
-            // 如果在本行内左右边界都已找到，则立即跳出内层循环
+            // 检查是否在本行内已经同时找到了左右边界。
             if (l_found && r_found)
             {
-                // 可选：增加一个宽度判断，防止左右边界点离得太近
-                if ((p_right->x - p_left->x) > 10) // 例如最小宽度为10个像素
+                // 验证赛道宽度：增加一个宽度判断，可以有效滤除因噪点被误识别为赛道的情况。
+                if ((p_right->x - p_left->x) > 10) // 例如，有效赛道宽度必须大于10个像素
                 {
-                    return true; // 成功
+                    return true; // 找到有效起始行，函数成功返回
                 }
                 else
                 {
+                    // 如果宽度无效，可能是找到了一个假的右边界（例如一个噪点）。
+                    // 我们通过 continue 继续循环，希望能找到一个更远、更真实的右边界。
                     continue;
                 }
             }
         }
     }
 
-    // 4. 如果遍历完所有行都没有同时找到左右边界，则返回失败
+    // 4. 如果完整遍历了所有行，仍然没有找到符合条件的起始点，则函数失败。
     return false; // 失败
 }
