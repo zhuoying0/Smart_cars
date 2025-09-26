@@ -1,49 +1,33 @@
-// menu_system.h
+#ifndef _MENU_H_
+#define _MENU_H_
 
-#ifndef _MENU_SYSTEM_H_
-#define _MENU_SYSTEM_H_
+#include "menu_system.h"
 
-#include "zf_common_typedef.h"
+// 模拟的图像数据和处理结果
+// 在实际项目中，这些数据会由摄像头和图像处理算法更新
+extern const uint8_t g_grayscale_image[128 * 64]; // 假设屏幕是128x64
 
-// 前向声明，避免头文件循环引用
-struct Menu;
-
-// 菜单项结构体
+// 应用程序数据结构体
 typedef struct {
-    const char* text;                   // 菜单项显示的文本
-    void (*action)(void);               // 关联的动作函数指针
-    const struct Menu* submenu;         // 指向的子菜单，与action互斥
-} MenuItem;
-
-// 菜单结构体
-typedef struct Menu {
-    const MenuItem* items;              // 指向菜单项数组
-    const uint8_t item_count;           // 菜单项的数量
-} Menu;
-
-// 用户输入类型枚举
-typedef enum {
-    MENU_INPUT_UP,
-    MENU_INPUT_DOWN,
-    MENU_INPUT_ENTER,
-    MENU_INPUT_BACK
-} MenuInput;
+    float angle;
+    int left_center_x, left_center_y;
+    int right_center_x, right_center_y;
+    char element_state[20];
+    int element_stage;
+    char running_status[10];
+    bool show_binary_image;
+} AppData;
 
 /**
- * @brief 初始化菜单系统
- * @param main_menu 指向你的主菜单
+ * @brief 获取主菜单的指针
+ * @return const Menu* 指向主菜单
  */
-void menu_init(const Menu* main_menu);
+const Menu* menu_get_main_menu(void);
 
 /**
- * @brief 绘制当前菜单到屏幕
+ * @brief 更新菜单系统需要显示的实时数据
+ * @param data 包含最新数据的结构体指针
  */
-void menu_draw(void);
+void menu_update_data(const AppData* data);
 
-/**
- * @brief 处理用户输入并更新菜单状态和显示
- * @param input 用户的输入动作
- */
-void menu_handle_input(MenuInput input);
-
-#endif // _MENU_SYSTEM_H_
+#endif // _MENU_H_
