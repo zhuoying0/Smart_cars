@@ -1,134 +1,114 @@
-#include "uart_user.h"
+#include "uart_user.hh"
 
-// 全局变量定义
-// -----------------------------------------------------------------------------
-// 当前接收状态机的状态，由中断服务程序修改
-volatile uart_state_t rx_state = STATE_WAIT_HEADER1;
+// 协议常量定义 (设为模块内部，不暴露到头文件)
+#define FRAME_HEADER1  0xAA
+#define FRAME_HEADER2  0xAA
+#define FRAME_TAIL1    0xFF
+#define FRAME_TAIL2    0xFF
+#define FRAME_DATA_SIZE 6
 
-// 接收数据缓冲区，'volatile'关键字确保编译器不会优化掉对它的访问
-volatile uint8_t rx_order[FRAME_DATA_SIZE] = {0};
+// --- 模块级静态变量 ---
+// 为UART0创建一个静态的解析器实例
+static uart_parser_t uart0_parser;
 
-// 用于存储最终解析出的完整数据帧
-target_frame_t frame;
-
-
-// 函数定义
-// -----------------------------------------------------------------------------
-/**
- * @brief 通过UART发送单个字节
- * @param uart  指向UART外设寄存器的指针 (例如 UART_0_INST)
- * @param data  要发送的8位数据
- */
-void send_char(UART_Regs *uart, uint8_t data) {
-    // 等待，直到UART发送缓冲区为空闲状态
-    while (DL_UART_isBusy(uart) == true);
-    // 将数据写入发送数据寄存器
-    DL_UART_transmitData(uart, data);
-}
+// --- 内部函数 ---
 
 /**
- * @brief 通过UART发送一个以'\0'结尾的字符串
- * @param uart  指向UART外设寄存器的指针 (例如 UART_0_INST)
- * @param data  指向字符串的指针
+ * @brief 将缓冲区的数据解析并组装成 target_frame_t 结构
+ * @param parser 指向解析器实例的指针
  */
-void send_str(UART_Regs *uart, uint8_t *data) {
-    // 循环发送直到遇到字符串结束符 '\0'
-    while (*data != '\0') {
-        send_char(uart, *data++);
+static void process_frame(uart_parser_t *parser) {
+    target_frame_t frame;
+    
+    // 组合数据
+    frame.error_x = (int16_t)((parser->buffer[0] << 8) | parser->buffer[1]);
+    frame.error_y = (int16_t)((parser->buffer[2] << 8) | parser->buffer[3]);
+    frame.distance  = (uint16_t)((parser->buffer[4] << 8) | parser->buffer[5]);
+
+    // 如果用户注册了回调函数，则调用它
+    if (parser->callback) {
+        parser->callback(&frame);
     }
 }
 
-/**
- * @brief 处理一帧完整且校验通过的数据
- * @note  此函数在接收到完整帧的帧尾后被调用。
- * 它将缓冲区中的字节数据组合成有意义的数据结构。
- */
-void process_rx_frame(void) {
-    // 使用具名索引代替魔法数字，提高代码可读性和可维护性
-    // 将高8位和低8位字节组合成16位有符号整数
-    frame.error_x = (int16_t)((rx_order[IDX_ERROR_X_H] << 8) | rx_order[IDX_ERROR_X_L]);
-    frame.error_y = (int16_t)((rx_order[IDX_ERROR_Y_H] << 8) | rx_order[IDX_ERROR_Y_L]);
-    
-    // 将高8位和低8位字节组合成16位无符号整数
-    frame.distance = (uint16_t)((rx_order[IDX_DISTANCE_H] << 8) | rx_order[IDX_DISTANCE_L]);
+
+// --- 公共接口函数实现 ---
+
+void uart_parser_init(uart_parser_t *parser, frame_handler_callback_t callback) {
+    parser->state = STATE_WAIT_HEADER1;
+    parser->data_index = 0;
+    parser->checksum = 0;
+    parser->callback = callback;
 }
 
-/**
- * @brief UART0字节接收状态机
- * @note  此函数应在UART接收中断中被调用。它根据预定义的协议解析传入的字节流。
- */
-void UART0_rx_dataframe(void) {
-    uint8_t rx_data = DL_UART_receiveData(UART_0_INST); // 从硬件接收一个字节
-    
-    // static变量只在第一次进入函数时初始化，之后在函数调用之间保持其值
-    static uint8_t data_index = 0; // 当前接收的数据字节索引
-    static uint8_t checksum = 0;   // 累加校验和
-
-    switch (rx_state) {
-        case STATE_WAIT_HEADER1: // 等待帧头1 (0xAA)
-            if (rx_data == FRAME_HEADER1) {
-                rx_state = STATE_WAIT_HEADER2;
+void uart_parser_handle_byte(uart_parser_t *parser, uint8_t byte) {
+    switch (parser->state) {
+        case STATE_WAIT_HEADER1:
+            if (byte == FRAME_HEADER1) parser->state = STATE_WAIT_HEADER2;
+            break;
+        
+        case STATE_WAIT_HEADER2:
+            if (byte == FRAME_HEADER2) {
+                parser->data_index = 0;
+                parser->checksum = 0;
+                parser->state = STATE_WAIT_DATA;
+            } else {
+                parser->state = STATE_WAIT_HEADER1;
             }
             break;
             
-        case STATE_WAIT_HEADER2: // 等待帧头2 (0xAA)
-            if (rx_data == FRAME_HEADER2) {
-                data_index = 0; // 重置数据索引
-                checksum = 0;   // 重置校验和
-                rx_state = STATE_WAIT_DATA; // 帧头正确，进入数据接收状态
+        case STATE_WAIT_DATA:
+            parser->buffer[parser->data_index] = byte;
+            parser->checksum += byte;
+            parser->data_index++;
+            if (parser->data_index >= FRAME_DATA_SIZE) {
+                parser->state = STATE_WAIT_CHECKSUM;
+            }
+            break;
+
+        case STATE_WAIT_CHECKSUM:
+            if (byte == parser->checksum) {
+                parser->state = STATE_WAIT_TAIL1;
             } else {
-                rx_state = STATE_WAIT_HEADER1; // 帧头错误，重置状态机
+                parser->state = STATE_WAIT_HEADER1;
+            }
+            break;
+
+        case STATE_WAIT_TAIL1:
+            if (byte == FRAME_TAIL1) {
+                parser->state = STATE_WAIT_TAIL2;
+            } else {
+                parser->state = STATE_WAIT_HEADER1;
             }
             break;
             
-        case STATE_WAIT_DATA: // 接收数据部分
-            rx_order[data_index] = rx_data;
-            // 累加校验和，利用 uint8_t 的自动溢出特性实现模256和校验
-            checksum += rx_data; 
-            data_index++;
-            if (data_index >= FRAME_DATA_SIZE) {
-                rx_state = STATE_WAIT_CHECKSUM; // 数据接收完成，进入校验和状态
+        case STATE_WAIT_TAIL2:
+            if (byte == FRAME_TAIL2) {
+                process_frame(parser); // 处理完整数据帧
             }
-            break;
-
-        case STATE_WAIT_CHECKSUM: // 等待并校验和
-            if (rx_data == checksum) {
-                rx_state = STATE_WAIT_TAIL1; // 校验和正确，等待帧尾1
-            } else {
-                rx_state = STATE_WAIT_HEADER1; // 校验和错误，重置状态机
-            }
-            break;
-
-        case STATE_WAIT_TAIL1: // 等待帧尾1 (0xFF)
-            if (rx_data == FRAME_TAIL1) {
-                rx_state = STATE_WAIT_TAIL2;
-            } else {
-                rx_state = STATE_WAIT_HEADER1; // 帧尾错误，重置状态机
-            }
-            break;
-            
-        case STATE_WAIT_TAIL2: // 等待帧尾2 (0xFF)
-            if (rx_data == FRAME_TAIL2) {
-                process_rx_frame(); // 帧尾正确，一帧数据接收成功，进行处理
-            }
-            // 无论成功与否，一帧的接收过程都已结束，重置状态机以准备接收下一帧
-            rx_state = STATE_WAIT_HEADER1; 
-            break;
-
-        default: // 异常状态处理
-            rx_state = STATE_WAIT_HEADER1;
+            parser->state = STATE_WAIT_HEADER1; // 无论成功与否都重置
             break;
     }
 }
 
-/**
- * @brief UART0 中断服务函数 (ISR)
- * @note  当中断发生时，硬件会调用此函数。
- */
+
+// --- 中断服务函数 ---
+
+// 声明一个函数，该函数将在main.c中定义
+void on_frame_received(target_frame_t *frame);
+
 void UART_0_INST_IRQHandler(void) {
-    // 检查是否为接收中断标志
+    // 检查是否为UART0的接收中断
     if (DL_UART_getPendingInterrupt(UART_0_INST) == DL_UART_IIDX_RX) {
-        // 调用状态机处理接收到的字节
-        UART0_rx_dataframe();
+        uint8_t received_byte = DL_UART_receiveData(UART_0_INST);
+        
+        // 每次中断只做一件事：将接收到的字节喂给解析器
+        uart_parser_handle_byte(&uart0_parser, received_byte);
     }
+}
+
+// 在系统启动时，需要初始化这个解析器
+// 可以在main函数开始的地方调用一次
+void uart0_parser_setup(void) {
+    uart_parser_init(&uart0_parser, on_frame_received);
 }
