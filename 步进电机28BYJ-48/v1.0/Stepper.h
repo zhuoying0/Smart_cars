@@ -46,14 +46,14 @@ void Stepper_TIM_IRQHandler(void);
 /**
  * @brief 命令电机旋转指定的步数
  * @param steps 步数。正数: 正转 (CW), 负数: 反转 (CCW)
- * @param speed_ms_per_step 每一步之间的毫秒数 (值越小, 转速越快, 推荐 2-5)
+ * @param speed_ms_per_step 每一步之间的毫秒数 (值越小, 转速越快, 推荐 1-5)
  */
 void Stepper_MoveSteps(int32_t steps, uint16_t speed_ms_per_step);
 
 /**
  * @brief 命令电机旋转指定的角度
  * @param angle 角度。正数: 正转 (CW), 负数: 反转 (CCW)
- * @param speed_ms_per_step 每一步之间的毫秒数 (值越小, 转速越快, 推荐 2-5)
+ * @param speed_ms_per_step 每一步之间的毫秒数 (值越小, 转速越快, 推荐 1-5)
  */
 void Stepper_MoveAngle(int16_t angle, uint16_t speed_ms_per_step);
 
@@ -66,3 +66,4 @@ uint8_t Stepper_IsRunning(void);
 
 
 #endif // __STEPPER_H
+
