@@ -108,7 +108,7 @@ void Stepper_MoveSteps(int32_t steps, uint16_t speed_ms_per_step)
     if (steps == 0) return;
     
     // 确保速度不为0
-    if (speed_ms_per_step == 0) speed_ms_per_step = 2; 
+    if (speed_ms_per_step == 0) speed_ms_per_step = 1; 
 
     // 设置全局变量 (原子操作或关中断保护，但在简单系统中通常还好)
     // (如果已有任务在运行，新任务会覆盖旧任务)
@@ -171,3 +171,4 @@ void Stepper_TIM_IRQHandler(void)
         }
     }
 }
+
